@@ -1,0 +1,4 @@
+**/bin/
+**/obj/
+MoovupRateLimiter.Tests/
+.git/

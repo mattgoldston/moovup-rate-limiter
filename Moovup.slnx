@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="MoovupRateLimiter/MoovupRateLimiter.csproj" />
+  <Project Path="MoovupRateLimiter.Tests/MoovupRateLimiter.Tests.csproj" />
+</Solution>

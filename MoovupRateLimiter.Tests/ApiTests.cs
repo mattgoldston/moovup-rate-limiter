@@ -158,4 +158,93 @@ public class ApiTests : IClassFixture<WebApplicationFactory<Program>>
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
+
+    [Fact]
+    public async Task PostSlidingWindowAllow_HappyPath_Returns200WithCorrectShape()
+    {
+        var response = await _client.PostAsJsonAsync("/sliding-window/allow", new { user_id = "sw-happy", timestamp = 1710000000.0 });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(json.GetProperty("allowed").GetBoolean());
+        Assert.Equal("sw-happy", json.GetProperty("user_id").GetString());
+        var window = json.GetProperty("window");
+        Assert.Equal(1, window.GetProperty("count").GetInt32());
+        Assert.Equal(5, window.GetProperty("limit").GetInt32());
+        Assert.Equal(5.0, window.GetProperty("window_seconds").GetDouble());
+        Assert.Equal(1710000000.0, window.GetProperty("last_updated_at").GetDouble());
+        Assert.Equal(1710000000.0, window.GetProperty("timestamps")[0].GetDouble());
+    }
+
+    [Fact]
+    public async Task PostSlidingWindowAllow_LimitReached_Returns429WithCorrectBody()
+    {
+        var userId = "sw-full";
+        var timestamp = 1710000000.0;
+
+        for (var i = 0; i < 5; i++)
+            await _client.PostAsJsonAsync("/sliding-window/allow", new { user_id = userId, timestamp });
+
+        var response = await _client.PostAsJsonAsync("/sliding-window/allow", new { user_id = userId, timestamp });
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(json.GetProperty("allowed").GetBoolean());
+        Assert.Equal(userId, json.GetProperty("user_id").GetString());
+        Assert.Equal("window_limit_exceeded", json.GetProperty("reason").GetString());
+        Assert.True(json.TryGetProperty("window", out _));
+    }
+
+    [Fact]
+    public async Task PostSlidingWindowAllow_IsIndependentOfLeakyBucket()
+    {
+        var userId = "sw-independent";
+        var timestamp = 1710000000.0;
+
+        for (var i = 0; i < 6; i++)
+            await _client.PostAsJsonAsync("/allow", new { user_id = userId, timestamp });
+
+        var response = await _client.PostAsJsonAsync("/sliding-window/allow", new { user_id = userId, timestamp });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PostSlidingWindowAllow_InvalidRequest_Returns400()
+    {
+        var missingUser = await _client.PostAsJsonAsync("/sliding-window/allow", new { user_id = "", timestamp = 1710000000.0 });
+        var missingTimestamp = await _client.PostAsJsonAsync("/sliding-window/allow", new { user_id = "sw-bad" });
+        var negativeTimestamp = await _client.PostAsJsonAsync("/sliding-window/allow", new { user_id = "sw-bad", timestamp = -1.0 });
+        var hugeTimestamp = await _client.PostAsJsonAsync("/sliding-window/allow", new { user_id = "sw-bad", timestamp = 1e20 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, missingUser.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, missingTimestamp.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, negativeTimestamp.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, hugeTimestamp.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetSlidingWindow_KnownUser_Returns200WithWrapper()
+    {
+        var userId = "sw-get-known";
+        await _client.PostAsJsonAsync("/sliding-window/allow", new { user_id = userId, timestamp = 1710000000.0 });
+
+        var response = await _client.GetAsync($"/users/{userId}/sliding-window");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(userId, json.GetProperty("user_id").GetString());
+        Assert.Equal(1, json.GetProperty("window").GetProperty("count").GetInt32());
+    }
+
+    [Fact]
+    public async Task GetSlidingWindow_UnknownUser_Returns404()
+    {
+        var response = await _client.GetAsync("/users/sw-no-such-user/sliding-window");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
 }
